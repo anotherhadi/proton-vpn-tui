@@ -1,0 +1,43 @@
+app:
+  show_flags: true
+  focus_search_on_launch: false
+  default:
+    tor: false # Enable Tor over VPN
+    p2p: false # Only show P2P-optimized servers
+    securecore: false # Use an entry node and an exit node
+    free: false # Show only free servers
+    prefer: "fastest" # 'fastest' or 'random'
+
+  # Country code (e.g. "CH"), country name (e.g. "Switzerland"), or a
+  # specific server ID (e.g. "CH#20"). Case-insensitive.
+  favorites: []
+
+keybindings:
+  global:
+    quit: "q,ctrl+c"
+    escape: "esc,ctrl+c"
+    help: "?"
+    up: "up,k"
+    down: "down,j"
+    left: "left,h"
+    right: "right,l"
+    goto_top: "g"
+    goto_bottom: "G,end"
+
+  home:
+    open_settings: "s"
+    connect: "enter,c"
+    disconnect: "d"
+    goto_favorite: "f"
+    search: "/,ctrl+f"
+    refresh: "r"
+    toggle_tor: "t"
+    toggle_securecore: "S"
+    toggle_p2p: "p"
+    toggle_free: "F"
+    toggle_prefer: "P"
+
+  settings:
+    toggle_setting: "space"
+    previous_option: "left,h"
+    next_option: "right,l"
