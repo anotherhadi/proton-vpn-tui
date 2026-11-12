@@ -1,88 +1,80 @@
-package app
+package ui
 
-import (
-	"fmt"
+import tea "charm.land/bubbletea/v2"
 
-	tea "charm.land/bubbletea/v2"
-	zone "github.com/lrstanley/bubblezone/v2"
-)
-
-const (
-	zoneBadgeFastest    = "badge-fastest"
-	zoneBadgeRandom     = "badge-random"
-	zoneBadgeSecureCore = "badge-securecore"
-	zoneBadgeTor        = "badge-tor"
-	zoneBadgeP2P        = "badge-p2p"
-	zoneBadgeFree       = "badge-free"
-)
-
-func rowZoneID(index int) string {
-	return fmt.Sprintf("row-%d", index)
-}
-
-func (m Model) updateMouseClick(msg tea.MouseClickMsg) (Model, tea.Cmd) {
-	if msg.Button != tea.MouseLeft {
-		return m, nil
+func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
+	if m.fatal != "" || !minSize.Fits(m.w, m.h) {
+		return nil
+	}
+	if m.overlays.Top() != nil {
+		return m.overlays.Mouse(msg)
 	}
 
-	switch {
-	case zone.Get(zoneBadgeFastest).InBounds(msg):
-		m.prefer = "fastest"
-		return m, nil
-
-	case zone.Get(zoneBadgeRandom).InBounds(msg):
-		m.prefer = "random"
-		return m, nil
-
-	case zone.Get(zoneBadgeSecureCore).InBounds(msg):
-		m.filters.SecureCore = !m.filters.SecureCore
-		m.tree = buildTree(m.servers, m.filters)
-		return m, m.refreshList()
-
-	case zone.Get(zoneBadgeTor).InBounds(msg):
-		m.filters.Tor = !m.filters.Tor
-		m.tree = buildTree(m.servers, m.filters)
-		return m, m.refreshList()
-
-	case zone.Get(zoneBadgeP2P).InBounds(msg):
-		m.filters.P2P = !m.filters.P2P
-		m.tree = buildTree(m.servers, m.filters)
-		return m, m.refreshList()
-
-	case zone.Get(zoneBadgeFree).InBounds(msg):
-		m.filters.Free = !m.filters.Free
-		m.tree = buildTree(m.servers, m.filters)
-		return m, m.refreshList()
+	mm := msg.Mouse()
+	if _, click := msg.(tea.MouseClickMsg); click {
+		for _, t := range m.toastRects {
+			if t.Contains(mm.X, mm.Y) {
+				m.notes.DismissID(t.id)
+				return nil
+			}
+		}
+		for name, r := range m.badgeRects {
+			if r.Contains(mm.X, mm.Y) {
+				return m.clickBadge(name)
+			}
+		}
 	}
 
-	return m.clickRow(msg)
+	if !m.listRect.Contains(mm.X, mm.Y) {
+		return nil
+	}
+	_, y := m.listRect.Local(mm.X, mm.Y)
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return m.clickRow(y)
+	case tea.MouseWheelMsg:
+		m.list.Mouse(msg)
+	}
+	return nil
 }
 
-func (m Model) clickRow(msg tea.MouseClickMsg) (Model, tea.Cmd) {
-	items := m.list.Items()
-	for i := range items {
-		if !zone.Get(rowZoneID(i)).InBounds(msg) {
-			continue
-		}
-		if i != m.list.Index() {
-			m.list.Select(i)
-			return m, nil
-		}
+// clickRow maps a click at local line y (within the list area) to a row: each
+// row is rowHeight lines tall with rowGap blank lines after it.
+func (m *Model) clickRow(y int) tea.Cmd {
+	if y%rowStride >= rowHeight {
+		return nil // the gap between rows
+	}
+	start, _ := m.list.Visible()
+	idx := start + y/rowStride
+	if idx < 0 || idx >= len(m.rows) {
+		return nil
+	}
+	before := m.list.Selected()
+	m.list.Select(idx)
+	if idx == before {
 		return m.activateSelected()
 	}
-	return m, nil
+	return nil
 }
 
-func (m Model) activateSelected() (Model, tea.Cmd) {
-	r, ok := m.selectedRow()
-	if !ok {
-		return m, nil
+func (m *Model) clickBadge(name string) tea.Cmd {
+	switch name {
+	case "fastest":
+		m.prefer = "fastest"
+	case "random":
+		m.prefer = "random"
+	case "securecore":
+		m.filters.SecureCore = !m.filters.SecureCore
+		m.rebuildTree()
+	case "tor":
+		m.filters.Tor = !m.filters.Tor
+		m.rebuildTree()
+	case "p2p":
+		m.filters.P2P = !m.filters.P2P
+		m.rebuildTree()
+	case "free":
+		m.filters.Free = !m.filters.Free
+		m.rebuildTree()
 	}
-	if r.kind == rowServer {
-		return m.connectSelected()
-	}
-	if r.expanded {
-		return m.collapseSelected()
-	}
-	return m.expandSelected()
+	return nil
 }

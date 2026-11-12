@@ -110,54 +110,13 @@ func configCachePath() (string, error) {
 	return filepath.Join(cacheHome, "proton-vpn-tui", "config.json"), nil
 }
 
-func (c Config) CycleSettingUp(setting string) (err error) {
-	entry, ok := c[setting]
-	if !ok || len(entry.Options) == 0 {
+// Set changes a setting to one of its Options and saves the cache.
+func (c Config) Set(setting, value string) error {
+	if _, ok := c[setting]; !ok {
 		return errors.New("setting unknown")
 	}
-
-	idx := -1
-	for i, opt := range entry.Options {
-		if opt.ID == entry.Value {
-			idx = i
-			break
-		}
-	}
-
-	next := idx + 1
-	if next >= len(entry.Options) {
-		next = 0
-	}
-
-	return c.setSetting(setting, entry.Options[next].ID)
-}
-
-func (c Config) CycleSettingDown(setting string) (err error) {
-	entry, ok := c[setting]
-	if !ok || len(entry.Options) == 0 {
-		return errors.New("setting unknown")
-	}
-
-	idx := -1
-	for i, opt := range entry.Options {
-		if opt.ID == entry.Value {
-			idx = i
-			break
-		}
-	}
-
-	prev := idx - 1
-	if prev < 0 {
-		prev = len(entry.Options) - 1
-	}
-
-	return c.setSetting(setting, entry.Options[prev].ID)
-}
-
-func (c Config) setSetting(setting string, value string) error {
 	ctx := context.Background()
-	_, err := Run(ctx, "config", "set", setting, value)
-	if err != nil {
+	if _, err := Run(ctx, "config", "set", setting, value); err != nil {
 		return err
 	}
 	entry := c[setting]

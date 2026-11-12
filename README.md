@@ -1,9 +1,6 @@
 ```
- ____            _           __     ______  _   _   _____ _   _ ___
-|  _ \ _ __ ___ | |_ ___  _ _\ \   / /  _ \| \ | | |_   _| | | |_ _|
-| |_) | '__/ _ \| __/ _ \| '_ \ \ / /| |_) |  \| |   | | | | | || |
-|  __/| | | (_) | || (_) | | | \ V / |  __/| |\  |   | | | |_| || |
-|_|   |_|  \___/ \__\___/|_| |_|\_/  |_|   |_| \_|   |_|  \___/|___|
+ █▀█ █▀█ █▀█ ▀█▀ █▀█ █▄ █ ▄▄ █ █ █▀█ █▄ █ ▄▄ ▀█▀ █ █ █
+ █▀▀ █▀▄ █▄█  █  █▄█ █ ▀█    ▀▄▀ █▀▀ █ ▀█     █  █▄█ █
 ```
 
 # ProtonVPN TUI
@@ -13,7 +10,6 @@
 ![GitHub Stars](https://www.shieldcn.dev/github/stars/anotherhadi/proton-vpn-tui.svg?variant=outline&theme=violet)
 ![Release](https://www.shieldcn.dev/github/release/anotherhadi/proton-vpn-tui.svg?variant=outline&theme=violet)
 ![CI](https://www.shieldcn.dev/github/ci/anotherhadi/proton-vpn-tui.svg?variant=outline&theme=violet)
-[![Ko-fi](https://www.shieldcn.dev/badge/Ko--fi-sponsor-FF5E5B.svg?logo=kofi&variant=secondary&theme=violet)](https://ko-fi.com/anotherhadi)
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -46,7 +42,7 @@
 go install github.com/anotherhadi/proton-vpn-tui/cmd/proton-vpn-tui@latest
 ```
 
-Requires Go 1.22+. The binary will be placed in `$GOPATH/bin` (or `~/go/bin`).
+Requires Go 1.26+. The binary will be placed in `$GOPATH/bin` (or `~/go/bin`).
 
 </details>
 
@@ -65,9 +61,12 @@ environment.systemPackages = [ nur.repos.anotherhadi.proton-vpn-tui ];
 ## Configuration
 
 Proton-VPN-TUI is fully configured via a YAML file at `~/.config/proton-vpn-tui/config.yaml`.
-Check the default configuration with all the options [here](./internal/config/default_config.yaml)
+Check the default configuration with all the options [here](./internal/config/default.yaml), or run
+`proton-vpn-tui --print-config` to see the merged configuration.
 
-Colors and styles can be customized using [ilovetui](https://github.com/anotherhadi/ilovetui), which applies theme changes across all compatible TUI applications at once.
+It's built on [foam](https://github.com/anotherhadi/foam), so colors, theme and keybindings shared with
+other foam-based tools live in `~/.config/foam/config.yaml` and apply across all of them at once. Press
+`?` for the full list of shortcuts, or `ctrl+p` for the command palette.
 
 ---
 

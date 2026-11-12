@@ -1,4 +1,4 @@
-package app
+package ui
 
 import (
 	"sort"
@@ -27,17 +27,6 @@ type row struct {
 
 	serverCount int
 	avgLoad     int
-}
-
-func (r row) FilterValue() string {
-	switch r.kind {
-	case rowServer:
-		return r.server.Name + " " + r.city + " " + backend.CountryName(r.country)
-	case rowCity:
-		return r.city + " " + backend.CountryName(r.country)
-	default:
-		return r.country + " " + backend.CountryName(r.country)
-	}
 }
 
 func cityKey(country, city string) string { return country + "\x00" + city }

@@ -1,11 +1,9 @@
-package app
+package ui
 
 import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/anotherhadi/ilovetui/notification"
 
 	"github.com/anotherhadi/proton-vpn-tui/internal/backend"
 )
@@ -137,8 +135,4 @@ func disconnectCmd() tea.Cmd {
 		err := backend.Disconnect()
 		return connectResultMsg{err: err, disconnect: true}
 	}
-}
-
-func errorToast(err error) tea.Cmd {
-	return notification.Show("Error", err.Error(), notification.Error)
 }

@@ -1,26 +1,20 @@
-package app
+package ui
 
 import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
-	"github.com/anotherhadi/ilovetui/app"
-	"github.com/anotherhadi/ilovetui/bubbles"
-	"github.com/anotherhadi/ilovetui/drawer"
-	"github.com/anotherhadi/ilovetui/helpbar"
-	"github.com/anotherhadi/ilovetui/modal"
-	"github.com/anotherhadi/ilovetui/notification"
+	"github.com/anotherhadi/foam/commands"
+	"github.com/anotherhadi/foam/geom"
+	"github.com/anotherhadi/foam/input"
+	"github.com/anotherhadi/foam/list"
+	"github.com/anotherhadi/foam/notify"
+	"github.com/anotherhadi/foam/overlay"
 
 	"github.com/anotherhadi/proton-vpn-tui/internal/backend"
 	"github.com/anotherhadi/proton-vpn-tui/internal/config"
-	"github.com/anotherhadi/proton-vpn-tui/internal/icons"
-	"github.com/anotherhadi/proton-vpn-tui/internal/ui/settings"
 )
 
 type filters struct {
@@ -30,11 +24,17 @@ type filters struct {
 	Free       bool
 }
 
-type Model struct {
-	list list.Model
-	help helpbar.Model
+type toastRect struct {
+	geom.Rect
+	id int
+}
 
-	width, height int
+type Model struct {
+	cfg *config.Config
+	reg *commands.Registry
+
+	rows []row
+	list list.Model
 
 	servers       []backend.LogicalServer
 	tree          []*countryGroup
@@ -53,323 +53,204 @@ type Model struct {
 	connecting     bool
 	disconnecting  bool
 
-	searching   bool
-	searchInput textinput.Model
+	searching bool
+	search    input.Model
 
-	Overlay bool
+	overlays overlay.Stack
+	notes    notify.Center
+
+	// fatal replaces the whole UI with a message; any key quits.
+	fatal string
+
+	w, h int
+
+	listRect   geom.Rect
+	badgeRects map[string]geom.Rect
+	toastRects []toastRect
 }
 
-func New() Model {
-	l := bubbles.NewList(nil, 0, 0)
-	l.SetDelegate(rowDelegate{})
-	l.SetShowHelp(false)
-	l.SetFilteringEnabled(false)
-	l.SetShowStatusBar(false)
-	l.SetShowTitle(false)
-	l.DisableQuitKeybindings()
-
-	gk := config.Global.Keybindings.Global
-	l.KeyMap.CursorUp = gk.Up
-	l.KeyMap.CursorDown = gk.Down
-	l.KeyMap.GoToStart = gk.GotoTop
-	l.KeyMap.GoToEnd = gk.GotoBottom
-
-	h := helpbar.New(helpbar.WithToggle(gk.Help))
-
-	si := bubbles.NewTextInput()
-	si.Prompt = icons.I.Search + " "
-	si.Placeholder = "country, city, or server id…"
-
-	focusSearch := config.Global.App.FocusSearchOnLaunch
-	if focusSearch {
-		si.Focus()
+func New(cfg *config.Config) (*Model, error) {
+	reg, err := commands.New(cfg.Keys)
+	if err != nil {
+		return nil, fmt.Errorf("invalid config:\n%w", err)
 	}
 
-	def := config.Global.App.Default
-	return Model{
-		list:              l,
-		help:              h,
-		searchInput:       si,
-		searching:         focusSearch,
+	def := cfg.App.Default
+	m := &Model{
+		cfg:               cfg,
+		reg:               reg,
 		expandedCountries: map[string]bool{},
 		expandedCities:    map[string]bool{},
 		filters:           filters{Tor: def.Tor, SecureCore: def.SecureCore, P2P: def.P2P, Free: def.Free},
 		prefer:            def.Prefer,
 	}
+	m.search = input.New(iconSearch() + " ")
+	m.search.Placeholder = "country, city, or server id…"
+	m.searching = cfg.App.FocusSearchOnLaunch
+	m.notes.Max = 100
+
+	if err := reg.Check(m.allScopes()); err != nil {
+		return nil, fmt.Errorf("invalid config:\n%w", err)
+	}
+	return m, nil
 }
 
-func (m Model) Init() tea.Cmd {
-	return tea.Batch(
-		fetchServersCache, refreshServers,
-		fetchQuickStatus, fetchStatus,
-		tickCmd(),
-	)
+func (m *Model) Init() tea.Cmd {
+	return tea.Batch(fetchServersCache, refreshServers, fetchQuickStatus, fetchStatus, tickCmd())
 }
 
-func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	m, cmd := m.update(msg)
-	m.resizeList()
-	return m, cmd
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return m, m.update(msg)
 }
 
-func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
+func (m *Model) update(msg tea.Msg) tea.Cmd {
+	if m.fatal != "" {
+		if _, ok := msg.(tea.KeyPressMsg); ok {
+			return tea.Quit
+		}
+		return nil
+	}
+	if m.overlays.Handle(msg) {
+		return nil
+	}
+	if cmd, ok := m.notes.Update(msg); ok {
+		return cmd
+	}
+
 	switch msg := msg.(type) {
-
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.help.SetWidth(msg.Width)
-		m.searchInput.SetWidth(max(msg.Width-14, 10))
-		return m, nil
+		m.w, m.h = msg.Width, msg.Height
+
+	case tea.KeyPressMsg:
+		return m.key(msg)
+
+	case tea.PasteMsg:
+		return m.paste(msg)
+
+	case tea.MouseMsg:
+		return m.mouse(msg)
 
 	case tickMsg:
-		return m, tea.Batch(fetchStatus, tickCmd())
+		return tea.Batch(fetchStatus, tickCmd())
 
 	case serversMsg:
 		m.servers = msg
 		m.serversLoaded = true
-		m.tree = buildTree(m.servers, m.filters)
-		cmd := m.refreshList()
-		return m, cmd
+		m.rebuildTree()
 
 	case serversRefreshedMsg:
 		m.servers = msg
 		m.serversLoaded = true
-		m.tree = buildTree(m.servers, m.filters)
-		cmd := m.refreshList()
-		return m, tea.Batch(cmd, notification.Show("ProtonVPN", "Server list refreshed from cache", notification.Success))
+		m.rebuildTree()
+		return notify.Success("Server list refreshed from cache")
 
 	case serversErrMsg:
 		m.serversLoaded = true
 		if backend.IsAuthRequired(msg.err) {
-			return m, modal.Show("Not signed in", notSignedInModal{})
+			m.fatal = "You're not signed in.\n\n" +
+				"Run `protonvpn signin` to sign in,\nthen restart proton-vpn-tui.\n\n" +
+				"Press any key to quit."
+			return nil
 		}
-		return m, errorToast(msg.err)
+		return notify.Err(msg.err)
 
 	case serversCacheErrMsg:
-		return m, nil
+		return nil
+
+	case settingsCacheErrMsg:
+		return notify.Err(msg.err)
 
 	case quickStatusMsg:
 		if !m.statusLoaded {
 			m.quickConnected = bool(msg)
 		}
-		return m, nil
 
 	case quickStatusErrMsg:
-		return m, nil
+		return nil
 
 	case statusMsg:
 		m.status = backend.ConnectionStatus(msg)
 		m.statusErr = nil
 		m.statusLoaded = true
-		return m, nil
 
 	case statusErrMsg:
 		m.statusErr = msg.err
 		m.status = backend.ConnectionStatus{}
 		m.statusLoaded = true
-		return m, nil
 
 	case connectResultMsg:
 		m.connecting = false
 		m.disconnecting = false
 		if msg.err != nil {
-			return m, tea.Batch(errorToast(msg.err), fetchStatus)
+			return tea.Batch(notify.Err(msg.err), fetchStatus)
 		}
-		title, text := "ProtonVPN", fmt.Sprintf("Connected to %s", msg.target)
+		text := fmt.Sprintf("Connected to %s", msg.target)
 		switch {
 		case msg.disconnect:
 			text = "Disconnected"
 		case msg.freeFallback:
-			title = "Free plan"
 			text = "Free accounts can't pick a server or location. Connected you to an available free server instead."
 		}
-		return m, tea.Batch(fetchStatus, notification.Show(title, text, notification.Success))
-
-	case tea.KeyPressMsg:
-		if m.Overlay {
-			return m, nil
-		}
-		if m.searching {
-			return m.updateSearch(msg)
-		}
-		return m.updateList(msg)
-
-	case tea.MouseWheelMsg:
-		if m.Overlay {
-			return m, nil
-		}
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			m.list.CursorUp()
-		case tea.MouseWheelDown:
-			m.list.CursorDown()
-		}
-		return m, nil
-
-	case tea.MouseClickMsg:
-		if m.Overlay {
-			return m, nil
-		}
-		return m.updateMouseClick(msg)
+		return tea.Batch(fetchStatus, notify.Success(text))
 	}
-
-	if m.Overlay {
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	return nil
 }
 
-func (m Model) updateList(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	gk := config.Global.Keybindings.Global
-	hk := config.Global.Keybindings.Home
-
-	switch {
-	case key.Matches(msg, gk.Quit):
-		return m, app.Quit()
-
-	case key.Matches(msg, hk.OpenSettings):
-		title := "Settings"
-		if icons.I.Settings != "" {
-			title = icons.I.Settings + " " + title
+func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
+	if !minSize.Fits(m.w, m.h) {
+		if b, ok := m.reg.Match(m.scopes()[:1], msg); ok && b.ID == "app.quit" {
+			return b.Run()
 		}
-		return m, drawer.Show(title, settings.New(m.width, m.drawerContentHeight()), drawer.WithSide(drawer.Right))
-
-	case key.Matches(msg, hk.Search):
-		m.searching = true
-		return m, m.searchInput.Focus()
-
-	case key.Matches(msg, gk.Escape):
-		if strings.TrimSpace(m.searchInput.Value()) == "" {
-			return m, nil
-		}
-		m.searchInput.Reset()
-		cmd := m.refreshList()
-		return m, cmd
-
-	case key.Matches(msg, hk.Refresh):
-		return m, refreshServersManual
-
-	case key.Matches(msg, hk.Disconnect):
-		m.disconnecting = true
-		return m, disconnectCmd()
-
-	case key.Matches(msg, hk.ToggleTor):
-		m.filters.Tor = !m.filters.Tor
-		m.tree = buildTree(m.servers, m.filters)
-		cmd := m.refreshList()
-		return m, cmd
-
-	case key.Matches(msg, hk.ToggleSecureCore):
-		m.filters.SecureCore = !m.filters.SecureCore
-		m.tree = buildTree(m.servers, m.filters)
-		cmd := m.refreshList()
-		return m, cmd
-
-	case key.Matches(msg, hk.ToggleP2P):
-		m.filters.P2P = !m.filters.P2P
-		m.tree = buildTree(m.servers, m.filters)
-		cmd := m.refreshList()
-		return m, cmd
-
-	case key.Matches(msg, hk.ToggleFree):
-		m.filters.Free = !m.filters.Free
-		m.tree = buildTree(m.servers, m.filters)
-		cmd := m.refreshList()
-		return m, cmd
-
-	case key.Matches(msg, hk.TogglePrefer):
-		if m.prefer == "random" {
-			m.prefer = "fastest"
-		} else {
-			m.prefer = "random"
-		}
-		return m, nil
-
-	case key.Matches(msg, hk.GotoFavorite):
-		m.gotoFavorite()
-		return m, nil
-
-	case key.Matches(msg, gk.Right):
-		return m.expandSelected()
-
-	case key.Matches(msg, gk.Left):
-		return m.collapseSelected()
-
-	case key.Matches(msg, hk.Connect):
-		return m.connectSelected()
+		return nil
 	}
-
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
-}
-
-func (m Model) selectedRow() (row, bool) {
-	if item := m.list.SelectedItem(); item != nil {
-		return item.(row), true
+	if m.overlays.Top() != nil {
+		return m.overlays.Key(m.reg, msg)
 	}
-	return row{}, false
-}
-
-func (m Model) expandSelected() (Model, tea.Cmd) {
-	r, ok := m.selectedRow()
-	if !ok {
-		return m, nil
-	}
-	switch r.kind {
-	case rowCountry:
-		m.expandedCountries[r.country] = true
-	case rowCity:
-		m.expandedCities[cityKey(r.country, r.city)] = true
-	default:
-		return m, nil
-	}
-	cmd := m.refreshList()
-	return m, cmd
-}
-
-func (m Model) collapseSelected() (Model, tea.Cmd) {
-	r, ok := m.selectedRow()
-	if !ok {
-		return m, nil
-	}
-	switch r.kind {
-	case rowCountry:
-		m.expandedCountries[r.country] = false
-	case rowCity, rowServer:
-		m.expandedCities[cityKey(r.country, r.city)] = false
-	}
-	cmd := m.refreshList()
-	return m, cmd
-}
-
-func (m *Model) gotoFavorite() {
-	for i, item := range m.list.Items() {
-		if r, ok := item.(row); ok && r.kind == rowCountry && r.favorite {
-			m.list.Select(i)
-			return
+	if m.searching {
+		before := m.search.Value()
+		if m.search.Update(msg) {
+			if m.search.Value() != before {
+				m.clearExpanded()
+				m.refreshRows()
+			}
+			return nil
 		}
 	}
+	if b, ok := m.reg.Match(m.scopes(), msg); ok {
+		return b.Run()
+	}
+	return nil
 }
 
-func (m Model) connectSelected() (Model, tea.Cmd) {
-	r, ok := m.selectedRow()
-	if !ok {
-		return m, nil
+func (m *Model) paste(msg tea.PasteMsg) tea.Cmd {
+	if o := m.overlays.Top(); o != nil {
+		return o.Update(msg)
 	}
-	m.connecting = true
-	if r.kind == rowServer {
-		return m, connectServer(r.server)
+	if !m.searching {
+		return nil
 	}
-	return m, connectGroup(r.country, r.city, m.prefer, m.filters)
+	before := m.search.Value()
+	if m.search.Update(msg) && m.search.Value() != before {
+		m.clearExpanded()
+		m.refreshRows()
+	}
+	return nil
 }
 
-func (m Model) favoritesSet() (countries, servers map[string]bool) {
+func (m *Model) clearExpanded() {
+	m.expandedCountries = map[string]bool{}
+	m.expandedCities = map[string]bool{}
+}
+
+func (m *Model) rebuildTree() {
+	m.tree = buildTree(m.servers, m.filters)
+	m.refreshRows()
+}
+
+func (m *Model) favoritesSet() (countries, servers map[string]bool) {
 	countries = map[string]bool{}
 	servers = map[string]bool{}
-	for _, raw := range config.Global.App.Favorites {
+	for _, raw := range m.cfg.App.Favorites {
 		f := strings.TrimSpace(raw)
 		if f == "" {
 			continue
@@ -385,111 +266,126 @@ func (m Model) favoritesSet() (countries, servers map[string]bool) {
 	return
 }
 
-func (m *Model) refreshList() tea.Cmd {
-	q := strings.TrimSpace(m.searchInput.Value())
+func (m *Model) refreshRows() {
+	q := strings.TrimSpace(m.search.Value())
 	favCountries, favServers := m.favoritesSet()
-	var rows []row
 	if q != "" {
-		rows = searchRows(m.tree, q, m.expandedCountries, m.expandedCities, favCountries, favServers)
+		m.rows = searchRows(m.tree, q, m.expandedCountries, m.expandedCities, favCountries, favServers)
 	} else {
-		rows = flattenRows(m.tree, m.expandedCountries, m.expandedCities, favCountries, favServers)
+		m.rows = flattenRows(m.tree, m.expandedCountries, m.expandedCities, favCountries, favServers)
 	}
-	return m.setListItems(rows)
+	m.list.SetLen(len(m.rows))
 }
 
-func (m *Model) setListItems(rows []row) tea.Cmd {
-	items := make([]list.Item, len(rows))
-	for i, r := range rows {
-		items[i] = r
+func (m *Model) selectedRow() (row, bool) {
+	if len(m.rows) == 0 {
+		return row{}, false
 	}
-	cmd := m.list.SetItems(items)
-	m.resizeList()
-	if idx := m.list.Index(); len(items) > 0 && (idx < 0 || idx >= len(items)) {
-		m.list.Select(len(items) - 1)
+	return m.rows[m.list.Selected()], true
+}
+
+func (m *Model) gotoFavorite() tea.Cmd {
+	for i, r := range m.rows {
+		if r.kind == rowCountry && r.favorite {
+			m.list.Select(i)
+			return nil
+		}
 	}
-	return cmd
+	return nil
 }
 
-func (m *Model) resizeList() {
-	m.list.SetDelegate(rowDelegate{showInfo: m.showServersColumn()})
-	m.list.SetSize(m.width, m.listHeight())
-}
-
-func (m Model) showServersColumn() bool {
-	return m.width > serversColumnMinWidth
-}
-
-func (m Model) listHeight() int {
-	headerH := lipgloss.Height(m.renderHeader())
-	helpH := m.help.Height(m.helpBindings()...)
-	return m.height - headerH - helpH
-}
-
-func (m Model) View() string {
-	header := m.renderHeader()
-	listView := strings.TrimRight(m.list.View(), "\n")
-	if !m.serversLoaded && len(m.list.Items()) == 0 {
-		listView = m.loadingView()
+func (m *Model) expandSelected() tea.Cmd {
+	r, ok := m.selectedRow()
+	if !ok {
+		return nil
 	}
-	return strings.Join([]string{header, listView}, "\n")
-}
-
-func (m Model) loadingView() string {
-	text := mutedStyle.Render(icons.I.Loading + " loading…")
-	return lipgloss.Place(m.width, max(m.listHeight(), 1), lipgloss.Center, lipgloss.Center, text)
-}
-
-func (m Model) WindowTitle() string {
-	const base = "ProtonVPN TUI"
-	switch {
-	case m.statusLoaded && m.status.Connected:
-		return base + " - Connected"
-	case m.statusLoaded:
-		return base + " - Disconnected"
-	case m.quickConnected:
-		return base + " - Connected"
+	switch r.kind {
+	case rowCountry:
+		m.expandedCountries[r.country] = true
+	case rowCity:
+		m.expandedCities[cityKey(r.country, r.city)] = true
 	default:
-		return base
+		return nil
 	}
+	m.refreshRows()
+	return nil
 }
 
-func (m Model) HelpView() string {
-	return strings.TrimRight(m.help.View(m.helpBindings()...), "\n")
-}
-
-func (m *Model) ToggleHelp() {
-	m.help.ShowAll = !m.help.ShowAll
-	m.resizeList()
-}
-
-func (m Model) settingsHelpHeight() int {
-	pages := config.Help(config.Global.Keybindings.Global, config.Global.Keybindings.Settings)
-	return m.help.Height(m.bindingsFor(pages)...)
-}
-
-func (m Model) drawerContentHeight() int {
-	return m.height - m.settingsHelpHeight()
-}
-
-func (m Model) DrawerWindowSizeMsg() tea.WindowSizeMsg {
-	return tea.WindowSizeMsg{Width: m.width, Height: m.drawerContentHeight()}
-}
-
-func (m Model) bindingsFor(pages config.HelpKeyMap) []key.Binding {
-	if !m.help.ShowAll {
-		return pages.ShortHelp()
+func (m *Model) collapseSelected() tea.Cmd {
+	r, ok := m.selectedRow()
+	if !ok {
+		return nil
 	}
-	var all []key.Binding
-	for _, col := range pages.FullHelp() {
-		all = append(all, col...)
+	switch r.kind {
+	case rowCountry:
+		m.expandedCountries[r.country] = false
+	case rowCity, rowServer:
+		m.expandedCities[cityKey(r.country, r.city)] = false
 	}
-	return all
+	m.refreshRows()
+	return nil
 }
 
-func (m Model) helpBindings() []key.Binding {
-	pages := config.Help(config.Global.Keybindings.Global, config.Global.Keybindings.Home)
-	if m.Overlay {
-		pages = config.Help(config.Global.Keybindings.Global, config.Global.Keybindings.Settings)
+func (m *Model) activateSelected() tea.Cmd {
+	r, ok := m.selectedRow()
+	if !ok {
+		return nil
 	}
-	return m.bindingsFor(pages)
+	if r.kind == rowServer {
+		return m.connectSelected()
+	}
+	if r.expanded {
+		return m.collapseSelected()
+	}
+	return m.expandSelected()
+}
+
+func (m *Model) connectSelected() tea.Cmd {
+	r, ok := m.selectedRow()
+	if !ok {
+		return nil
+	}
+	m.connecting = true
+	if r.kind == rowServer {
+		return connectServer(r.server)
+	}
+	return connectGroup(r.country, r.city, m.prefer, m.filters)
+}
+
+func (m *Model) disconnectSelected() tea.Cmd {
+	m.disconnecting = true
+	return disconnectCmd()
+}
+
+func (m *Model) openSearch() tea.Cmd {
+	m.searching = true
+	return nil
+}
+
+func (m *Model) cancelSearch() tea.Cmd {
+	m.searching = false
+	m.search.Reset()
+	m.refreshRows()
+	return nil
+}
+
+func (m *Model) submitSearch() tea.Cmd {
+	q := strings.TrimSpace(m.search.Value())
+	if q == "" {
+		return m.cancelSearch()
+	}
+	m.searching = false
+	if id := strings.ToUpper(q); backend.IsServerID(id) {
+		m.selectServerByID(id)
+	}
+	return nil
+}
+
+func (m *Model) selectServerByID(id string) {
+	for i, r := range m.rows {
+		if r.kind == rowServer && strings.EqualFold(r.server.Name, id) {
+			m.list.Select(i)
+			return
+		}
+	}
 }

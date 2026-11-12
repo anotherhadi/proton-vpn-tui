@@ -1,0 +1,51 @@
+# proton-vpn-tui defaults: the reference for every setting.
+#
+# Do not copy this file: put only what you change in one of these (later wins):
+#
+#   ~/.config/foam/config.yaml             shared by every foam tool (theme, keys)
+#   ~/.config/proton-vpn-tui/config.yaml    proton-vpn-tui
+#   PROTON_VPN_TUI_* environment variables  e.g. PROTON_VPN_TUI_APP__SHOWFLAGS=false
+#   command-line flags                      e.g. -c app.showFlags=false
+
+app:
+  showFlags: true            # country flags instead of a generic marker
+  focusSearchOnLaunch: false
+
+  default:
+    tor: false          # route through Tor
+    p2p: false           # only show P2P-optimized servers
+    securecore: false    # entry node + exit node
+    free: false           # only show free servers
+    prefer: fastest       # fastest or random
+
+  # Country code (e.g. "CH"), country name (e.g. "Switzerland"), or a
+  # specific server ID (e.g. "CH#20"). Case-insensitive.
+  favorites: []
+
+# By command ID: a key, a list, or [] for none (palette only). foam's own
+# shortcuts (list, help, palette, form, confirm, prompt) come from
+# ~/.config/foam/config.yaml; only proton-vpn-tui's own are here.
+keys:
+  app:
+    quit: [q, ctrl+c]
+    help: "?"
+    palette: ctrl+p
+  server:
+    connect: [enter, c]
+    disconnect: d
+    refresh: r
+    goto-favorite: f
+    expand: [l, right]
+    collapse: [h, left]
+  search:
+    open: [/, ctrl+f]
+    submit: enter
+    cancel: esc
+  filter:
+    tor: t
+    securecore: S
+    p2p: p
+    free: F
+    prefer: P
+  settings:
+    open: s
